@@ -1,0 +1,3 @@
+svgelements>=1.9
+# for the tests
+pytest

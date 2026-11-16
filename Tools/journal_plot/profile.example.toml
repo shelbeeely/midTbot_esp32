@@ -1,0 +1,56 @@
+# journal_plot profile. Copy to my_pen.toml, fill in your calibration
+# (Docs/journal_pages.md), then: python3 journal_plot.py page.svg -p my_pen.toml
+# Any key you leave out keeps its default.
+
+[pen]
+z_up = 5.0        # servo Z for travel (pen clear of the paper)
+z_touch = 0.0     # servo Z where the tip just touches the paper
+z_max = -2.0      # servo Z for full pressure (spring stretched)
+z_hover = 0.6     # drop fast to z_touch + z_hover, then land gently
+
+# Optional: pen force measured with a kitchen scale under the pen tip.
+# With this, pressure 0..1 is linear in grams instead of linear in servo Z.
+# force_curve = [[0.0, 18], [-0.5, 34], [-1.0, 52], [-1.5, 71], [-2.0, 92]]
+
+[motion]
+draw_feed = 1500    # mm/min along the paper while drawing
+plunge_feed = 600   # mm/min for the gentle landing
+dwell_down = 0.08   # s after landing
+dwell_up = 0.12     # s after lifting (the servo needs time to clear the paper)
+park_x = 0.0        # pen changes happen here: pick a spot in the page margin
+park_y = 0.0
+
+[pressure]
+default = 0.5       # strokes with no data-pressure and no stroke width
+min = 0.1           # entry/exit pressure; raise it if stroke ends skip
+width_min = 0.2     # layout stroke width (mm) meaning pressure 0
+width_max = 2.0     # layout stroke width (mm) meaning pressure 1
+taper_in = 1.0      # mm ramp at the start of each stroke
+taper_out = 1.5     # mm ramp at the end of each stroke
+down_boost = 0.0    # 0..1, brush lettering: upstrokes this much lighter
+smooth = 1.0        # mm window for smoothing stroke direction
+
+[page]
+origin_x = 5.0      # machine position of the page's lower-left corner
+origin_y = 5.0
+flip_x = false
+flip_y = true
+swap_xy = false
+max_x = 100.0       # keep in step with max_travel_mm in config.yaml
+max_y = 100.0
+step = 0.25
+tolerance = 0.02
+optimize = true
+
+# Per-pen settings, keyed by Inkscape layer name (or data-pen="...").
+# Allowed: anything from [pressure] and [motion] (except park_*), and z_max.
+[pens."Brush pen"]
+down_boost = 0.6    # thick downstrokes, hairline upstrokes
+taper_in = 1.5
+taper_out = 2.5
+draw_feed = 900     # brush pens need time to lay ink
+
+[pens."Fineliner"]
+z_max = -1.0        # fineliners need little force; protect the tip
+taper_in = 0.5
+taper_out = 0.5

@@ -1,0 +1,135 @@
+# FluidNC config for a midTbot driven by off-the-shelf parts:
+#   ESP32-S3-DevKitC-1 + 2x TMC2209 StepStick (standalone / step-dir mode)
+#   + MG90S pen servo with a spring coupling for variable pen pressure.
+#
+# Needs FluidNC 4.0.1 or newer (first releases with ESP32-S3 support).
+# Wiring, parts list and calibration: Docs/esp32s3_upgrade.md and
+# Docs/journal_pages.md.
+#
+# Upload this file to the controller as config.yaml (FluidNC WebUI ->
+# Settings -> Upload, or `$Config/Filename=midtbot_s3.yaml`).
+#
+# Pen Z convention used by Tools/journal_plot (all values in "servo mm",
+# they are not real millimetres):
+#   Z = +5   pen up (travel)
+#   Z =  0   pen tip just touching the paper  (calibrate, see docs)
+#   Z = -2   maximum pen pressure (servo stretched against the spring)
+# The servo axis spans Z -2 .. +5, i.e. 7 units of travel.
+
+name: midTbot S3 pen pressure
+board: ESP32-S3-DevKitC-1 + TMC2209 StepSticks
+
+kinematics:
+  midtbot:
+
+stepping:
+  # If your FluidNC build rejects RMT on the S3, change this to Timed.
+  engine: RMT
+  idle_ms: 250
+  pulse_us: 2
+  dir_delay_us: 1
+  disable_delay_us: 0
+
+axes:
+  # TMC2209 EN is active low: driving this pin high disables the drivers.
+  shared_stepper_disable_pin: gpio.15
+
+  # 1.8 deg motors, 1/16 microstepping (MS1 + MS2 high), GT2 belt on a
+  # 16 tooth pulley = 32 mm/rev -> 3200 / 32 = 100 steps/mm.
+  # Draw a 50 mm square after homing and adjust if it measures off.
+  x:
+    steps_per_mm: 100
+    max_rate_mm_per_min: 8000
+    acceleration_mm_per_sec2: 200
+    # Measure your machine's usable travel and set this; 100 mm is a
+    # conservative starting point for the stock midTbot frame.
+    max_travel_mm: 100
+    soft_limits: true
+    homing:
+      # H-bot style kinematics must home X and Y one at a time.
+      cycle: 3
+      # If $H moves X away from its switch, flip this to true.
+      positive_direction: false
+      mpos_mm: 0
+      feed_mm_per_min: 300
+      seek_mm_per_min: 2000
+      settle_ms: 250
+    motor0:
+      # Switch closes to GND when pressed -> active low with pull-up.
+      # If FluidNC shows the X switch as triggered when it is not,
+      # remove ":low".
+      limit_neg_pin: gpio.17:low:pu
+      hard_limits: false
+      pulloff_mm: 1.5
+      stepstick:
+        step_pin: gpio.4
+        direction_pin: gpio.5
+
+  y:
+    steps_per_mm: 100
+    max_rate_mm_per_min: 8000
+    acceleration_mm_per_sec2: 200
+    max_travel_mm: 100
+    soft_limits: true
+    homing:
+      cycle: 2
+      positive_direction: false
+      mpos_mm: 0
+      feed_mm_per_min: 300
+      seek_mm_per_min: 2000
+      settle_ms: 250
+    motor0:
+      limit_neg_pin: gpio.18:low:pu
+      hard_limits: false
+      pulloff_mm: 1.5
+      stepstick:
+        step_pin: gpio.6
+        direction_pin: gpio.7
+
+  z:
+    # A servo has no steps; this only sets the position resolution.
+    steps_per_mm: 100
+    # Fast enough that pressure changes inside a stroke never slow the
+    # XY motion down. Tools/journal_plot adds a short dwell after every
+    # pen lift/drop so the servo can physically catch up.
+    max_rate_mm_per_min: 6000
+    acceleration_mm_per_sec2: 1000
+    # Z range = [mpos_mm - max_travel_mm, mpos_mm] = [-2, +5]
+    max_travel_mm: 7
+    soft_limits: true
+    homing:
+      # Z "homes" first and instantly: the servo jumps to mpos_mm
+      # (pen up) before X and Y move.
+      cycle: 1
+      positive_direction: true
+      mpos_mm: 5
+    motor0:
+      rc_servo:
+        output_pin: gpio.16
+        pwm_hz: 50
+        # The pulse width at Z = -2 and at Z = +5. Swap the two values if
+        # the pen goes the wrong way. Widen or narrow the pair so that
+        # Z = +5 clears the paper by a few mm and Z = -2 stretches the
+        # spring as far as you want maximum pressure to be.
+        min_pulse_us: 1000
+        max_pulse_us: 2100
+
+spi:
+  miso_pin: gpio.13
+  mosi_pin: gpio.11
+  sck_pin: gpio.12
+
+sdcard:
+  cs_pin: gpio.10
+  # Optional: wire the breakout's DET pin to gpio.9 and set
+  # card_detect_pin: gpio.9
+  card_detect_pin: NO_PIN
+
+start:
+  # Refuse to plot before homing, so pressure moves never happen with an
+  # unknown pen position.
+  must_home: true
+
+macros:
+  # Make sure the pen is up after homing.
+  after_homing: G0 Z5
