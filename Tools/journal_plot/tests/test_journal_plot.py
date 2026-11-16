@@ -374,3 +374,14 @@ def test_raccoon_plots_with_four_g2_pens(tmp_path):
     assert set(re.findall(r'stroke="(#[0-9a-f]+)"', svg)) == {"#141418"}
     # gel pens are never pressed past their own z_max
     assert min(float(z) for z in re.findall(r"Z(-?[\d.]+)", text)) >= -1.0 - 1e-9
+
+
+def test_skyline_plots_with_g2_pens(tmp_path):
+    out = tmp_path / "skyline.gcode"
+    skyline = HERE.parent / "examples" / "skyline_sketch.svg"
+    assert jp.main([str(skyline), "-p", str(G2_PROFILE), "-o", str(out)]) == 0
+    text = out.read_text()
+    # three tips are used, boldest first, and the fine pen does the towers, sky and water
+    assert text.count("M0") == 3
+    order = [text.index(f"pen: G2 {t} ") for t in ("0.7", "0.5", "0.38")]
+    assert order == sorted(order)

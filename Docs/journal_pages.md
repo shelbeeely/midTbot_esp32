@@ -202,6 +202,12 @@ uses them the way an illustrator would: the 1.0 for solid blacks, 0.7 and
 in the eyes are paper left untouched. It fills a 94 × 94 mm page: about
 6,000 strokes, 15 m of ink, an hour of plotting and four pen changes.
 
+[`examples/skyline_sketch.svg`](../Tools/journal_plot/examples/skyline_sketch.svg)
+is a lighter job for the same profile: an imaginary skyline across the water
+on a 94 × 62 mm page. The fine pen draws the towers, sky and water, and the
+bolder pens draw the low town, trees and boat in front, so line weight alone
+gives the depth. About 900 strokes, 3 m of ink, nine minutes and three pens.
+
 ```sh
 python3 journal_plot.py examples/raccoon_sketch.svg -p profile.g2.example.toml --preview
 ```
