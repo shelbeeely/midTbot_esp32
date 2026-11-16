@@ -67,6 +67,8 @@ DEFAULTS: dict[str, dict] = {
         "tip": "",          # a known pen (see PEN_TIPS), e.g. "g2-0.7": previews at its real line width
         "line_width": 0.0,  # or give the line width in mm yourself (0 = generic pressure preview)
         "line_flex": 0.13,  # how much pressure changes that width: +/- this fraction
+        "ink_min": 1.0,     # how solid the line is at the lightest pressure (1 = opaque, like gel ink)
+        "ink_max": 1.0,     # ... and at full pressure. Below 1 the preview lets layers of ink mix (ballpoint, pencil)
     },
     "motion": {
         "draw_feed": 1500.0,   # mm/min along the paper while drawing
@@ -101,7 +103,7 @@ DEFAULTS: dict[str, dict] = {
 }
 
 PEN_OVERRIDABLE = set(DEFAULTS["pressure"]) | set(DEFAULTS["motion"]) | {"z_max", "slot"}
-PEN_OVERRIDABLE |= {"tip", "line_width", "line_flex", "color"}
+PEN_OVERRIDABLE |= {"tip", "line_width", "line_flex", "color", "ink_min", "ink_max"}
 PEN_OVERRIDABLE -= {"park_x", "park_y"}
 # Real pens for the preview: tip (ball) size -> the line it lays down, in mm.
 # Pilot G2: 0.7 -> 0.39 is Pilot's published figure and 0.5 -> 0.32 a retailer's;
@@ -110,7 +112,8 @@ PEN_OVERRIDABLE -= {"park_x", "park_y"}
 PEN_TIPS = {"g2-0.38": 0.26, "g2-0.5": 0.32, "g2-0.7": 0.39, "g2-1.0": 0.52}
 # What a multipen slot (one refill colour, or one pen position) may set.
 SLOT_KEYS = {"axis", "offset_x", "offset_y", "select", "select_dwell", "color",
-             "z_up", "z_touch", "z_max", "z_hover", "force_curve", "tip", "line_width", "line_flex"}
+             "z_up", "z_touch", "z_max", "z_hover", "force_curve", "tip", "line_width", "line_flex",
+             "ink_min", "ink_max"}
 AXES = ("Z", "A", "B", "C")
 Z_TOLERANCE = 0.01  # servo units allowed when removing redundant points
 
@@ -223,6 +226,8 @@ def validate(cfg: dict) -> None:
         sys.exit(f"profile: unknown tip {cfg['tip']!r}; known tips: {', '.join(sorted(PEN_TIPS))}")
     if cfg["line_width"] < 0 or not 0 <= cfg["line_flex"] <= 0.5:
         sys.exit("profile: line_width must be >= 0 and line_flex within 0..0.5")
+    if not 0 < cfg["ink_min"] <= cfg["ink_max"] <= 1:
+        sys.exit("profile: need 0 < ink_min <= ink_max <= 1")
     if cfg["color"] and parse_color(cfg["color"]) is None:
         sys.exit(f"profile: color must look like \"#rrggbb\" (got {cfg['color']!r})")
     if not cfg["z_max"] < cfg["z_touch"] < cfg["z_up"]:
@@ -714,6 +719,11 @@ def preview_width(cfg: dict, pressure: float, w_min=0.12, w_max=1.2) -> float:
     return w_min + pressure * (w_max - w_min)
 
 
+def preview_ink(cfg: dict, pressure: float) -> float:
+    """How solid the preview draws a line at a given pressure (1 = opaque)."""
+    return cfg["ink_min"] + (cfg["ink_max"] - cfg["ink_min"]) * pressure
+
+
 def preview_svg(plotted: list[Plotted], page: tuple[float, float]) -> str:
     """Page-orientation SVG: simulated pens at their real width, others with width = pressure."""
     colors = ["#1a1a1a", "#1f5fbf", "#b8322e", "#2f8a3c", "#8a4fbf", "#c27a12"]
@@ -738,17 +748,23 @@ def preview_svg(plotted: list[Plotted], page: tuple[float, float]) -> str:
             q = (p.pressures[i - 1] + p.pressures[i]) / 2
             level = round(q * (levels - 1))
             if run_level is not None and level != run_level:
-                out.append(_poly(run, preview_width(p.stroke.cfg, run_level / (levels - 1)), color))
+                out.append(_poly(run, preview_width(p.stroke.cfg, run_level / (levels - 1)), color,
+                                 preview_ink(p.stroke.cfg, run_level / (levels - 1))))
                 run = [pts[i - 1]]
             run.append(pts[i])
             run_level = level
-        out.append(_poly(run, preview_width(p.stroke.cfg, run_level / (levels - 1)), color))
+        out.append(_poly(run, preview_width(p.stroke.cfg, run_level / (levels - 1)), color,
+                         preview_ink(p.stroke.cfg, run_level / (levels - 1))))
     out.append("</svg>")
     return "\n".join(out)
 
 
-def _poly(run, w, color):
+def _poly(run, w, color, ink=1.0):
     d = " ".join(f"{fmt(x)},{fmt(y)}" for x, y in run)
+    if ink < 0.999:        # translucent ink: layers darken and colours mix where strokes cross
+        return (f'<polyline points="{d}" fill="none" stroke="{color}" stroke-width="{fmt(w)}" '
+                f'stroke-opacity="{fmt(ink)}" style="mix-blend-mode:multiply" '
+                f'stroke-linecap="round" stroke-linejoin="round"/>')
     return (f'<polyline points="{d}" fill="none" stroke="{color}" stroke-width="{fmt(w)}" '
             f'stroke-linecap="round" stroke-linejoin="round"/>')
 

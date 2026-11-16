@@ -385,3 +385,44 @@ def test_skyline_plots_with_g2_pens(tmp_path):
     assert text.count("M0") == 3
     order = [text.index(f"pen: G2 {t} ") for t in ("0.7", "0.5", "0.38")]
     assert order == sorted(order)
+
+
+# --------------------------------------------------------------------------
+# Translucent inks (ballpoint, pencil) in the preview
+
+BALLPOINT = HERE.parent / "profile.ballpoint4.example.toml"
+
+
+def test_ink_strength_follows_pressure():
+    c = cfg(ink_min=0.1, ink_max=0.82)
+    assert jp.preview_ink(c, 0.0) == pytest.approx(0.1)
+    assert jp.preview_ink(c, 1.0) == pytest.approx(0.82)
+    assert jp.preview_ink(cfg(), 0.3) == 1.0          # default pens stay opaque
+
+
+def test_bad_ink_range_is_rejected(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text("[pen]\nink_min = 0.9\nink_max = 0.5\n")
+    with pytest.raises(SystemExit):
+        jp.load_profile(bad)
+
+
+def test_ballpoint_multipen_layers_colours_in_the_preview(tmp_path):
+    svg = tmp_path / "two.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="30mm" viewBox="0 0 40 30">'
+        '<path data-pressure="0.2" d="M5,5 L35,25" stroke="#d62a34" fill="none"/>'
+        '<path data-pressure="0.9" d="M5,25 L35,5" stroke="#263eac" fill="none"/></svg>')
+    out, preview = tmp_path / "two.gcode", tmp_path / "two_preview.svg"
+    assert jp.main([str(svg), "-p", str(BALLPOINT), "-o", str(out), "--preview", str(preview)]) == 0
+    text, pv = out.read_text(), preview.read_text()
+    assert "pen: red, slot red" in text and "pen: blue, slot blue" in text
+    assert text.count("M0") == 1                       # one pen: colours change without stopping
+    assert "mix-blend-mode:multiply" in pv
+    op = {c: max(float(o) for o in re.findall(rf'stroke="{c}"[^>]*stroke-opacity="([\d.]+)"', pv))
+          for c in ("#d62a34", "#263eac")}
+    assert op["#d62a34"] < op["#263eac"]               # the firmer stroke is the more solid one
+    # the gel-pen preview is unchanged: opaque, no blending
+    out2, pv2 = tmp_path / "g.gcode", tmp_path / "g_preview.svg"
+    assert jp.main([str(svg), "-p", str(G2_PROFILE), "-o", str(out2), "--preview", str(pv2)]) == 0
+    assert "stroke-opacity" not in pv2.read_text()

@@ -154,3 +154,39 @@ The job starts with one pause: the first colour is selected, the pen sits at
 its touch height, and you set the pen in the clamp and resume. After that it
 switches colours on its own, drawing in layout order (black, red, blue,
 green for the example) and selecting each colour once.
+
+## Drawing in coloured ballpoint
+
+A 4-colour ballpoint is more than four line colours. Ballpoint ink is
+translucent and answers to pressure, so with the pressure mod the plotter can
+draw the way ballpoint artists do: light strokes are faint, firm ones are
+saturated, and layers of hatching in different colours mix where they cross
+(red over blue reads as violet).
+
+[`profile.ballpoint4.example.toml`](../Tools/journal_plot/profile.ballpoint4.example.toml)
+sets this up for the classic black, blue, red and green refills. Three
+settings tell the preview how the ink behaves:
+
+```toml
+[pen]
+line_width = 0.32   # mm
+ink_min = 0.10      # how solid a stroke is at the lightest pressure
+ink_max = 0.82      # ... and at full pressure
+```
+
+With `ink_max` below 1 the preview draws strokes translucent and lets the
+colours mix. These numbers are a starting guess for a medium ballpoint;
+plot the pressure test card with your pen and adjust them until the preview
+matches the paper.
+
+[`examples/skyline_ballpoint.svg`](../Tools/journal_plot/examples/skyline_ballpoint.svg)
+is drawn this way: an imaginary skyline at dusk on a 94 × 62 mm page, built in
+layers (a loose construction sketch in black, red hatching for the light,
+blue for the shade, green for the trees, black only in the deepest darks).
+Every stroke carries its own `data-pressure`. It is a long plot: about 20,700
+strokes, 36 m of line and 2 hours 40 minutes, with the colours switched
+automatically.
+
+```sh
+python3 journal_plot.py examples/skyline_ballpoint.svg -p profile.ballpoint4.example.toml --preview
+```
