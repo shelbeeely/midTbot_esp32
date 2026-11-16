@@ -1,0 +1,69 @@
+# journal_plot profile for a MULTIPEN: one pen body with several colour
+# refills (e.g. a BIC 4-Colour), selected by servos on the pen mount.
+# Pairs with Firmware/FluidNC/midtbot_s3_multipen.yaml:
+#   Z = lift + pressure, A = colour selector (~degrees), B = clicker (0 rest, 10 push)
+# Hardware and calibration: Docs/multipen.md.
+#
+#   python3 journal_plot.py --offset-test -p my_multipen.toml   # measure tip offsets
+#   python3 journal_plot.py page.svg -p my_multipen.toml --preview
+
+[pen]
+z_up = 5.0
+z_touch = 0.0       # touch height of the colour selected during setup
+z_max = -1.5        # ballpoint refills don't need much force
+
+[motion]
+draw_feed = 1500
+park_x = 0.0        # where the one-time pen-height pause happens
+park_y = 0.0
+
+[pressure]
+default = 0.6
+taper_in = 0.5
+taper_out = 0.8
+
+[page]
+origin_x = 5.0
+origin_y = 5.0
+max_x = 100.0
+max_y = 100.0
+
+# --- One slot per refill colour ------------------------------------------
+# select    G-code that brings this colour out. Typical rotate-and-click
+#           sequence: turn the selector to the colour's slider, push it
+#           down until it latches, release. The A angles are placeholders
+#           for a selector geared 2:1 (A 0/45/90/135 turns the pen
+#           0/90/180/270 deg, one slider each). Find yours by jogging A
+#           until each slider lines up with the clicker.
+# color     the ink colour. Strokes go to the slot whose color is nearest
+#           their stroke colour in the layout, and the preview uses it.
+# z_touch   refills stick out by slightly different amounts. Measure each
+#           colour relative to the one selected during setup (here black).
+# offset_*  each refill's tip sits a fraction of a mm off the others.
+#           Measure with --offset-test.
+
+[slots.black]
+color = "#1a1a1a"
+select = ["G0 A0", "G0 B10", "G4 P0.2", "G0 B0"]
+
+[slots.blue]
+color = "#1f4fbf"
+select = ["G0 A45", "G0 B10", "G4 P0.2", "G0 B0"]
+z_touch = 0.05
+offset_x = 0.2
+
+[slots.red]
+color = "#c62828"
+select = ["G0 A90", "G0 B10", "G4 P0.2", "G0 B0"]
+z_touch = -0.05
+offset_y = 0.2
+
+[slots.green]
+color = "#2e7d32"
+select = ["G0 A135", "G0 B10", "G4 P0.2", "G0 B0"]
+offset_x = -0.2
+
+# Optional: tie a layer to a colour explicitly, and give it its own pressure style.
+# [pens."Headings"]
+# slot = "black"
+# down_boost = 0.4

@@ -66,9 +66,12 @@ RGB LED (GPIO38/48) pins.
 | 21 | 5V | 5 V in | Buck regulator 5 V out |
 | 22 | G | Ground | Common ground |
 
-GPIO 8, 9, 14 and 46 are left free (GPIO 46 is a strapping pin; avoid it).
-The firmware config with these pins is
-[`Firmware/FluidNC/midtbot_s3.yaml`](../Firmware/FluidNC/midtbot_s3.yaml).
+GPIO 8 and 14 are kept for the [multipen](multipen.md) colour-selector
+servos (J1 pins 12 and 20), GPIO 9 for optional SD card detect, and GPIO 46
+is a strapping pin, so avoid it. The firmware config with these pins is
+[`Firmware/FluidNC/midtbot_s3.yaml`](../Firmware/FluidNC/midtbot_s3.yaml)
+([`midtbot_s3_multipen.yaml`](../Firmware/FluidNC/midtbot_s3_multipen.yaml)
+adds the selector servos).
 
 The V2 board used GPIO 12/26 (X step/dir), 14/25 (Y step/dir), 13 (enable),
 27 (servo), 2 and 4 (limits), and 5/18/19/23 (SD). GPIO 22-25 don't exist on

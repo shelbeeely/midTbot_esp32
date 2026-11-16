@@ -194,3 +194,136 @@ def test_feed_compensates_for_z_motion():
     assert max(feeds) > s.cfg["draw_feed"] * 1.05  # ramp segments go faster along XYZ
     assert min(feeds) == pytest.approx(s.cfg["draw_feed"])
     assert all(not math.isnan(f) for f in feeds)
+
+
+# --------------------------------------------------------------------------
+# Multipen (one pen body, several colour refills)
+
+MULTI_PROFILE = HERE.parent / "profile.multipen.example.toml"
+MULTI_EXAMPLE = HERE.parent / "examples" / "multipen_page.svg"
+
+
+def test_multipen_strokes_map_to_nearest_colour():
+    c, pens = jp.load_profile(MULTI_PROFILE)
+    strokes, _, _ = jp.load_svg(MULTI_EXAMPLE, c, pens)
+    assert {s.pen for s in strokes} == {"black", "red", "blue", "green"}
+    for s in strokes:
+        assert s.cfg["slot"] == s.pen
+        assert s.cfg["axis"] == "Z"  # one pen body: every colour shares the lift servo
+
+
+def test_multipen_gcode_switches_colours_without_pausing(tmp_path):
+    out = tmp_path / "mp.gcode"
+    assert jp.main([str(MULTI_EXAMPLE), "-p", str(MULTI_PROFILE), "-o", str(out)]) == 0
+    text = out.read_text()
+    lines = text.splitlines()
+    assert text.count("M0") == 1  # only the one-time pen height setup
+    # setup selects black, so the black section must not select it again
+    black = lines.index(next(l for l in lines if l.startswith("(--- pen: black")))
+    assert lines[black + 1] != "G0 A0"
+    # every other colour runs its own select sequence right after its header
+    c, _ = jp.load_profile(MULTI_PROFILE)
+    for colour in ("red", "blue", "green"):
+        i = lines.index(next(l for l in lines if l.startswith(f"(--- pen: {colour}")))
+        sel = c["slots"][colour]["select"]
+        assert lines[i + 1:i + 1 + len(sel)] == sel
+    # never two words for the same axis in one move
+    for line in lines:
+        words = [w[0] for w in line.split()[1:] if w[0] in "XYZABC"]
+        assert len(words) == len(set(words)), line
+
+
+def test_multipen_uses_each_colours_touch_height(tmp_path):
+    out = tmp_path / "mp.gcode"
+    jp.main([str(MULTI_EXAMPLE), "-p", str(MULTI_PROFILE), "-o", str(out)])
+    lines = out.read_text().splitlines()
+    c, pens = jp.load_profile(MULTI_PROFILE)
+    red = jp.slot_cfg(c, "red")
+    expected = jp.make_z_map(red)(red["min"])  # strokes start at the pressure floor
+    i = lines.index(next(l for l in lines if l.startswith("(--- pen: red")))
+    plunge = next(l for l in lines[i:] if l.startswith("G1 Z"))
+    assert plunge.startswith(f"G1 Z{jp.fmt(expected)} ")
+
+
+def test_slot_offset_moves_the_carriage_not_the_ink(tmp_path):
+    prof = tmp_path / "p.toml"
+    prof.write_text(
+        '[slots.black]\ncolor = "#000000"\n'
+        '[slots.red]\ncolor = "#ff0000"\noffset_x = 0.5\noffset_y = -0.25\n'
+    )
+    svg = tmp_path / "two.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm" viewBox="0 0 50 50">'
+        '<path d="M10,10 L30,10" stroke="#000" fill="none"/>'
+        '<path d="M10,10 L30,10" stroke="#f00" fill="none"/></svg>'
+    )
+    out = tmp_path / "two.gcode"
+    assert jp.main([str(svg), "-p", str(prof), "-o", str(out), "--keep-order"]) == 0
+    starts = [l for l in out.read_text().splitlines() if l.startswith("G0 X")]
+    (bx, by), (rx, ry) = [tuple(float(w[1:]) for w in l.split()[1:3]) for l in starts[1:3]]
+    assert (bx - rx, by - ry) == pytest.approx((0.5, -0.25))
+
+
+def test_explicit_layer_slot_beats_colour_matching(tmp_path):
+    prof = tmp_path / "p.toml"
+    prof.write_text(
+        '[slots.black]\ncolor = "#000000"\n[slots.red]\ncolor = "#ff0000"\n'
+        '[pens."Notes"]\nslot = "black"\ndown_boost = 0.3\n'
+    )
+    svg = tmp_path / "l.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
+        'width="50mm" height="50mm" viewBox="0 0 50 50">'
+        '<g inkscape:groupmode="layer" inkscape:label="Notes">'
+        '<path d="M10,10 L30,10" stroke="#f00" fill="none"/></g></svg>'
+    )
+    c, pens = jp.load_profile(prof)
+    (s,) = jp.load_svg(svg, c, pens)[0]
+    assert s.cfg["slot"] == "black" and s.cfg["down_boost"] == 0.3
+
+
+@pytest.mark.parametrize("body", [
+    '[slots.a]\naxis = "Q"\n',
+    '[slots.a]\ncolor = "reddish"\n',
+    '[slots.a]\nspeed = 3\n',
+    '[pens."Ink"]\nslot = "nope"\n',
+])
+def test_bad_slot_profiles_are_rejected(tmp_path, body):
+    prof = tmp_path / "bad.toml"
+    prof.write_text(body)
+    with pytest.raises(SystemExit):
+        jp.load_profile(prof)
+
+
+def test_offset_test(tmp_path):
+    with pytest.raises(SystemExit):
+        jp.main(["--offset-test", "-o", str(tmp_path / "x.gcode")])  # no slots defined
+    out = tmp_path / "off.gcode"
+    assert jp.main(["--offset-test", "-p", str(MULTI_PROFILE), "-o", str(out)]) == 0
+    text = out.read_text()
+    for colour in ("black", "blue", "red", "green"):
+        assert f"(--- pen: {colour}," in text
+
+
+def test_manual_slot_keeps_a_separate_pen_out_of_the_multipen(tmp_path):
+    prof = tmp_path / "p.toml"
+    prof.write_text(
+        '[slots.black]\ncolor = "#000000"\nselect = "G0 A0"\n'
+        '[pens."Brush pen"]\nslot = "manual"\ndown_boost = 0.5\n'
+    )
+    svg = tmp_path / "m.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
+        'width="50mm" height="50mm" viewBox="0 0 50 50">'
+        '<g inkscape:groupmode="layer" inkscape:label="Brush pen">'
+        '<path d="M10,10 L30,10" stroke="#000" fill="none"/></g>'
+        '<path d="M10,20 L30,20" stroke="#000" fill="none"/></svg>'
+    )
+    c, pens = jp.load_profile(prof)
+    strokes = jp.load_svg(svg, c, pens)[0]
+    assert [(s.pen, s.cfg["slot"]) for s in strokes] == [("Brush pen", None), ("black", "black")]
+    out = tmp_path / "m.gcode"
+    assert jp.main([str(svg), "-p", str(prof), "-o", str(out), "--keep-order"]) == 0
+    text = out.read_text()
+    # one pause for the brush pen and one for the multipen's height setup
+    assert text.count("M0") == 2

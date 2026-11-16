@@ -20,9 +20,16 @@ Strokes are grouped by pen: data-pen="name" on an element/group, else the
 Inkscape layer name. Before each pen the plotter pauses (M0) with the servo
 at the pen-touch angle so you can mount the pen and set its height.
 
+Multipens (one pen body, several colour refills picked by a selector servo):
+define one [slots.<colour>] per refill in the profile, with the G-code that
+selects it, its tip offset and touch height, and an optional color = "#hex".
+Strokes go to the slot whose color is nearest their stroke colour (or set
+[pens."Layer"] slot = "<colour>"), and colours switch automatically with no
+pause. Calibrate tip offsets with --offset-test.
+
 Pressure maps onto the servo Z axis set up in Firmware/FluidNC/midtbot_s3.yaml:
 z_up (pen up), z_touch (tip just touching), z_max (full pressure).
-See Docs/journal_pages.md for calibration.
+See Docs/journal_pages.md and Docs/multipen.md.
 """
 
 from __future__ import annotations
@@ -48,6 +55,12 @@ DEFAULTS: dict[str, dict] = {
         "z_max": -2.0,      # servo Z for full pressure
         "z_hover": 0.6,     # how far above z_touch to drop quickly before landing gently
         "force_curve": [],  # optional [[z, grams], ...] measured with a scale
+        "axis": "Z",        # servo axis that lifts and presses the pen
+        "offset_x": 0.0,    # multipen: pen tip position relative to the reference pen, mm
+        "offset_y": 0.0,
+        "select": [],       # multipen: G-code lines to run when this pen becomes active
+        "select_dwell": 0.3,  # s to wait after the select G-code
+        "color": "",        # multipen: ink colour; strokes nearest this colour use the slot
     },
     "motion": {
         "draw_feed": 1500.0,   # mm/min along the paper while drawing
@@ -81,8 +94,12 @@ DEFAULTS: dict[str, dict] = {
     },
 }
 
-PEN_OVERRIDABLE = set(DEFAULTS["pressure"]) | set(DEFAULTS["motion"]) | {"z_max"}
+PEN_OVERRIDABLE = set(DEFAULTS["pressure"]) | set(DEFAULTS["motion"]) | {"z_max", "slot"}
 PEN_OVERRIDABLE -= {"park_x", "park_y"}
+# What a multipen slot (one refill colour, or one pen position) may set.
+SLOT_KEYS = {"axis", "offset_x", "offset_y", "select", "select_dwell", "color",
+             "z_up", "z_touch", "z_max", "z_hover", "force_curve"}
+AXES = ("Z", "A", "B", "C")
 Z_TOLERANCE = 0.01  # servo units allowed when removing redundant points
 
 
@@ -94,11 +111,17 @@ def flat_defaults() -> dict:
     cfg = {}
     for section in DEFAULTS.values():
         cfg.update(copy.deepcopy(section))
+    cfg["slot"] = None   # multipen slot of the current pen (None = manual pen change)
+    cfg["slots"] = {}    # slot name -> settings, from [slots.N]
     return cfg
 
 
 def load_profile(path: Path | None) -> tuple[dict, dict[str, dict]]:
-    """Return (settings, per-pen overrides) from a TOML profile."""
+    """Return (settings, per-pen overrides) from a TOML profile.
+
+    A pen that names a slot gets that slot's settings merged into its
+    overrides, so pen_cfg() needs no knowledge of slots.
+    """
     cfg = flat_defaults()
     pens: dict[str, dict] = {}
     if path is None:
@@ -114,6 +137,13 @@ def load_profile(path: Path | None) -> tuple[dict, dict[str, dict]]:
                     sys.exit(f"profile [pens.{name!r}]: keys not allowed per pen: {sorted(bad)}")
                 pens[name] = dict(over)
             continue
+        if section == "slots":
+            for name, over in values.items():
+                bad = set(over) - SLOT_KEYS
+                if bad:
+                    sys.exit(f"profile [slots.{name}]: keys not allowed per slot: {sorted(bad)}")
+                cfg["slots"][str(name)] = dict(over)
+            continue
         if section not in DEFAULTS:
             sys.exit(f"profile: unknown section [{section}]")
         bad = set(values) - set(DEFAULTS[section])
@@ -121,10 +151,64 @@ def load_profile(path: Path | None) -> tuple[dict, dict[str, dict]]:
             sys.exit(f"profile [{section}]: unknown keys {sorted(bad)}")
         cfg.update(values)
     validate(cfg)
+    for name in cfg["slots"]:
+        validate(slot_cfg(cfg, name))
+    for name, over in pens.items():
+        if over.get("slot") == "manual":
+            # A separate pen, not one of the multipen's refills: keep the
+            # manual pen-change pause and skip colour matching.
+            over.pop("slot")
+            pens[name] = {**over, "slot": None, "_manual": True}
+        elif "slot" in over:
+            slot = str(over.pop("slot"))
+            if slot not in cfg["slots"]:
+                sys.exit(f"profile [pens.{name!r}]: slot {slot!r} is not defined under [slots]")
+            pens[name] = {**cfg["slots"][slot], **over, "slot": slot}
     return cfg, pens
 
 
+def slot_cfg(cfg: dict, name: str) -> dict:
+    merged = dict(cfg)
+    merged.update(cfg["slots"][name])
+    merged["slot"] = name
+    return merged
+
+
+def parse_color(text: str) -> tuple[int, int, int] | None:
+    """'#rgb' or '#rrggbb' -> (r, g, b); None if it isn't one."""
+    t = text.strip().lstrip("#")
+    if len(t) == 3:
+        t = "".join(ch * 2 for ch in t)
+    if len(t) != 6:
+        return None
+    try:
+        return int(t[0:2], 16), int(t[2:4], 16), int(t[4:6], 16)
+    except ValueError:
+        return None
+
+
+def nearest_slot(rgb: tuple[int, int, int], cfg: dict) -> str | None:
+    """The slot whose color is closest to rgb, or None if no slot has a color."""
+    best, best_d = None, None
+    for name, over in cfg["slots"].items():
+        sc = parse_color(over.get("color", ""))
+        if sc is None:
+            continue
+        d = sum((a - b) ** 2 for a, b in zip(rgb, sc))
+        if best_d is None or d < best_d:
+            best, best_d = name, d
+    return best
+
+
 def validate(cfg: dict) -> None:
+    if cfg["axis"] not in AXES:
+        sys.exit(f"profile: axis must be one of {', '.join(AXES)} (got {cfg['axis']!r})")
+    if isinstance(cfg["select"], str):
+        cfg["select"] = [cfg["select"]] if cfg["select"] else []
+    if not all(isinstance(line, str) for line in cfg["select"]):
+        sys.exit("profile: select must be a G-code string or a list of strings")
+    if cfg["color"] and parse_color(cfg["color"]) is None:
+        sys.exit(f"profile: color must look like \"#rrggbb\" (got {cfg['color']!r})")
     if not cfg["z_max"] < cfg["z_touch"] < cfg["z_up"]:
         sys.exit("profile: need z_max < z_touch < z_up")
     if cfg["width_max"] <= cfg["width_min"]:
@@ -330,6 +414,15 @@ def load_svg(path: Path, cfg: dict, pens: dict[str, dict]):
             continue
         pen = str(e.values.get("data-pen") or e.values.get(INKSCAPE_LABEL) or "pen")
         c = pen_cfg(cfg, pens, pen)
+        color = e.stroke.hex[:7] if e.stroke.hex else None
+        if c["slot"] is None and color and not c.get("_manual"):
+            # Multipen: send the stroke to the refill nearest its colour.
+            # The layer's pressure style stays; the slot's hardware settings win.
+            slot = nearest_slot(parse_color(color), cfg)
+            if slot is not None:
+                c = {**c, **cfg["slots"][slot], "slot": slot}
+                validate(c)
+                pen = slot
         base = base_pressure(e, c)
         path = e if isinstance(e, SvgPath) else SvgPath(e)
         for sub in path.as_subpaths():
@@ -384,6 +477,31 @@ def test_pattern(cfg: dict) -> tuple[list[Stroke], tuple[float, float]]:
         loops.append((8 + 10.5 * t / math.pi - 6 * math.sin(t), 46 - 7.2 * math.cos(t)))
     strokes.append(Stroke(resample(loops, cfg["step"]), 1.0, "pen", brush))
     return strokes, (80.0, 60.0)
+
+
+def offset_pattern(cfg: dict) -> tuple[list[Stroke], tuple[float, float]]:
+    """Multipen offset card: every slot draws the same crosshair and circle.
+
+    With correct offsets all the crosses land on top of each other. Slot n
+    also draws n short ticks in its own row, to tell the pens apart.
+    """
+    if not cfg["slots"]:
+        sys.exit("--offset-test needs [slots.N] sections in the profile")
+    strokes = []
+    cx, cy = 20.0, 18.0
+    for n, name in enumerate(cfg["slots"], start=1):
+        c = slot_cfg(cfg, name)
+        validate(c)
+        c.update(taper_in=0.0, taper_out=0.0, down_boost=0.0)
+        pen = name
+        shapes = [[(cx - 9, cy), (cx + 9, cy)], [(cx, cy - 9), (cx, cy + 9)]]
+        shapes.append([(cx + 5 * math.cos(a / 60 * 2 * math.pi), cy + 5 * math.sin(a / 60 * 2 * math.pi))
+                       for a in range(61)])
+        row = 32 + 4 * (n - 1)
+        shapes += [[(6 + 2.5 * i, row), (6 + 2.5 * i, row + 2.5)] for i in range(n)]
+        for shape in shapes:
+            strokes.append(Stroke(resample(shape, c["step"]), 0.5, pen, c))
+    return strokes, (40.0, 32.0 + 4 * len(cfg["slots"]))
 
 
 # --------------------------------------------------------------------------
@@ -454,14 +572,51 @@ def plan(strokes: list[Stroke]) -> list[Plotted]:
 def to_gcode(plotted: list[Plotted], page: tuple[float, float], cfg: dict, source: str,
              pen_setup: bool = True) -> tuple[list[str], dict]:
     m = Mapper(page, cfg)
-    up = cfg["z_up"]
+    park = f"G0 X{fmt(cfg['park_x'])} Y{fmt(cfg['park_y'])}"
+
+    # Every servo axis this job uses, with its pen-up value. On a multipen
+    # head all of them are raised together so idle pens never drag.
+    ups: dict[str, float] = {}
+    slots: dict[str, dict] = {}
+    for p in plotted:
+        c = p.stroke.cfg
+        ups.setdefault(c["axis"], c["z_up"])
+        if c["slot"] is not None:
+            slots.setdefault(c["slot"], c)
+    if not ups:
+        ups[cfg["axis"]] = cfg["z_up"]
+    all_up = "G0 " + " ".join(f"{a}{fmt(z)}" for a, z in ups.items())
+
     lines = [
         f"(journal_plot: {source})",
-        f"(page {fmt(page[0])} x {fmt(page[1])} mm, z_up {fmt(up)}, z_touch {fmt(cfg['z_touch'])}, "
+        f"(page {fmt(page[0])} x {fmt(page[1])} mm, z_up {fmt(cfg['z_up'])}, z_touch {fmt(cfg['z_touch'])}, "
         f"z_max {fmt(cfg['z_max'])})",
         "G21 G90 G94",
-        f"G0 Z{fmt(up)}",
+        all_up,
     ]
+    if slots and pen_setup:
+        # Multipen: set the pen height once, up front, using the first colour
+        # on each lift axis. The other colours' z_touch values are calibrated
+        # relative to it, so no further pauses are needed.
+        first_on_axis: dict[str, dict] = {}
+        for c in slots.values():
+            first_on_axis.setdefault(c["axis"], c)
+        lines += ["(--- set up the multipen ---)", park]
+        for ax, c in first_on_axis.items():
+            lines += list(c["select"])
+            if c["select"]:
+                lines.append(f"G4 P{fmt(c['select_dwell'])}")
+            lines += [
+                f"G0 {ax}{fmt(c['z_touch'])}",
+                f"(Colour '{c['slot']}' is selected: set the pen so its tip just touches the paper, "
+                f"tighten the clamp, then resume)",
+                "M0",
+                f"G0 {ax}{fmt(c['z_up'])}",
+                f"G4 P{fmt(c['dwell_up'])}",
+            ]
+        selected = {c["axis"]: c["slot"] for c in first_on_axis.values()}
+    else:
+        selected = {}
     stats = {"strokes": 0, "draw_mm": 0.0, "travel_mm": 0.0, "pens": [], "min_xy": [1e9, 1e9], "max_xy": [-1e9, -1e9]}
     cur = (cfg["park_x"], cfg["park_y"])
     pen = None
@@ -472,29 +627,40 @@ def to_gcode(plotted: list[Plotted], page: tuple[float, float], cfg: dict, sourc
 
     for p in plotted:
         s, c = p.stroke, p.stroke.cfg
+        ax, up = c["axis"], c["z_up"]
         if s.pen != pen:
             pen = s.pen
             stats["pens"].append(pen)
-            lines.append(f"(--- pen: {pen} ---)")
-            if pen_setup:
-                lines += [
-                    f"G0 X{fmt(cfg['park_x'])} Y{fmt(cfg['park_y'])}",
-                    f"G0 Z{fmt(cfg['z_touch'])}",
-                    f"(Mount '{pen}' so the tip just touches the paper, tighten the clamp, then resume)",
-                    "M0",
-                    f"G0 Z{fmt(up)}",
-                    f"G4 P{fmt(c['dwell_up'])}",
-                ]
-                cur = (cfg["park_x"], cfg["park_y"])
-        pts = [m(*s.pts[i]) for i in p.idx]
+            if c["slot"] is None:
+                lines.append(f"(--- pen: {pen} ---)")
+                if pen_setup:
+                    lines += [
+                        park,
+                        f"G0 {ax}{fmt(c['z_touch'])}",
+                        f"(Mount '{pen}' so the tip just touches the paper, tighten the clamp, then resume)",
+                        "M0",
+                        f"G0 {ax}{fmt(up)}",
+                        f"G4 P{fmt(c['dwell_up'])}",
+                    ]
+                    cur = (cfg["park_x"], cfg["park_y"])
+            else:
+                lines.append(f"(--- pen: {pen}, slot {c['slot']}, axis {ax} ---)")
+            # Skip re-selecting the colour the setup pause just selected.
+            if c["select"] and selected.get(ax) != c["slot"]:
+                lines += list(c["select"]) + [f"G4 P{fmt(c['select_dwell'])}"]
+            selected[ax] = c["slot"]
+        # Command the carriage so that this pen's tip, not the reference
+        # pen's, lands on the page point.
+        ox, oy = c["offset_x"], c["offset_y"]
+        pts = [(x - ox, y - oy) for x, y in (m(*s.pts[i]) for i in p.idx)]
         zs = [p.zs[i] for i in p.idx]
         x0, y0 = pts[0]
         stats["travel_mm"] += math.hypot(x0 - cur[0], y0 - cur[1])
         hover = min(up, c["z_touch"] + c["z_hover"])
         lines += [
             f"G0 X{fmt(x0)} Y{fmt(y0)}",
-            f"G0 Z{fmt(hover)}",
-            f"G1 Z{fmt(zs[0])} F{fmt(c['plunge_feed'])}",
+            f"G0 {ax}{fmt(hover)}",
+            f"G1 {ax}{fmt(zs[0])} F{fmt(c['plunge_feed'])}",
             f"G4 P{fmt(c['dwell_down'])}",
         ]
         track(x0, y0)
@@ -502,20 +668,20 @@ def to_gcode(plotted: list[Plotted], page: tuple[float, float], cfg: dict, sourc
         for (xa, ya), (xb, yb), za, zb in zip(pts, pts[1:], zs, zs[1:]):
             dxy = math.hypot(xb - xa, yb - ya)
             stats["draw_mm"] += dxy
-            # FluidNC applies F along the XYZ vector; scale it so the pen
-            # still moves across the paper at draw_feed while Z changes.
+            # FluidNC applies F along the whole XY+servo vector; scale it so
+            # the pen still crosses the paper at draw_feed while pressure changes.
             f = c["draw_feed"] if dxy < 1e-9 else c["draw_feed"] * min(4.0, math.hypot(dxy, zb - za) / dxy)
             word = ""
             if last_f is None or abs(f - last_f) > 0.03 * last_f:
                 word = f" F{fmt(f)}"
                 last_f = f
-            lines.append(f"G1 X{fmt(xb)} Y{fmt(yb)} Z{fmt(zb)}{word}")
+            lines.append(f"G1 X{fmt(xb)} Y{fmt(yb)} {ax}{fmt(zb)}{word}")
             track(xb, yb)
-        lines += [f"G0 Z{fmt(up)}", f"G4 P{fmt(c['dwell_up'])}"]
+        lines += [f"G0 {ax}{fmt(up)}", f"G4 P{fmt(c['dwell_up'])}"]
         cur = pts[-1]
         stats["strokes"] += 1
 
-    lines += [f"G0 Z{fmt(up)}", f"G0 X{fmt(cfg['park_x'])} Y{fmt(cfg['park_y'])}", "M2"]
+    lines += [all_up, park, "M2"]
     pen_time = stats["strokes"] * (cfg["dwell_down"] + cfg["dwell_up"] + 0.25)
     stats["minutes"] = stats["draw_mm"] / cfg["draw_feed"] + stats["travel_mm"] / 6000 + pen_time / 60
     return lines, stats
@@ -532,7 +698,9 @@ def preview_svg(plotted: list[Plotted], page: tuple[float, float], w_min=0.12, w
     ]
     levels = 16
     for p in plotted:
-        color = pen_color.setdefault(p.stroke.pen, colors[len(pen_color) % len(colors)])
+        # A multipen colour previews in its own ink; other pens get a palette colour.
+        ink = p.stroke.cfg["color"]
+        color = ink if ink else pen_color.setdefault(p.stroke.pen, colors[len(pen_color) % len(colors)])
         pts = p.stroke.pts
         if len(pts) == 1:
             r = (w_min + p.pressures[0] * (w_max - w_min)) / 2
@@ -599,6 +767,8 @@ def main(argv=None) -> int:
     ap.add_argument("--preview", type=Path, nargs="?", const=True,
                     help="also write an SVG preview with line width = pressure (default name: <page>_preview.svg)")
     ap.add_argument("--test-pattern", action="store_true", help="plot a pressure calibration card instead of an SVG")
+    ap.add_argument("--offset-test", action="store_true",
+                    help="multipen: every slot draws the same crosshair, to measure pen offsets")
     ap.add_argument("--keep-order", action="store_true", help="plot strokes in document order")
     ap.add_argument("--no-pen-setup", action="store_true", help="no M0 pen-mount pause before each pen")
     ap.add_argument("--force", action="store_true", help="write G-code even if it leaves the machine area")
@@ -615,10 +785,16 @@ def main(argv=None) -> int:
             return out.with_name(out.stem + "_preview.svg")
         return args.preview
 
+    if args.test_pattern and args.offset_test:
+        ap.error("pick one of --test-pattern and --offset-test")
     if args.test_pattern:
         out = args.output or Path("pressure_test.gcode")
         strokes, page = test_pattern(cfg)
         return run("test pattern", strokes, page, cfg, out, preview_path(out), args.force, not args.no_pen_setup)
+    if args.offset_test:
+        out = args.output or Path("offset_test.gcode")
+        strokes, page = offset_pattern(cfg)
+        return run("offset test", strokes, page, cfg, out, preview_path(out), args.force, not args.no_pen_setup)
 
     if not args.svg:
         ap.error("give one or more SVG pages, or --test-pattern")

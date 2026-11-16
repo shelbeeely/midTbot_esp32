@@ -27,7 +27,8 @@ There currently are no full kits for sale, and the original controller kit is no
 
 * [ESP32-S3 controller from off-the-shelf parts](Docs/esp32s3_upgrade.md): ESP32-S3-DevKitC-1, TMC2209 StepSticks and FluidNC 4.x, plus a printed [controller plate](STL/midt_esp32s3_controller_plate.stl) that takes the old PCB's place under the motors and limit switches.
 * [Journal pages with pen pressure](Docs/journal_pages.md): a spring between servo and pen mount, so the servo can press as well as lift. Lay pages out as SVG and [`journal_plot`](Tools/journal_plot) plots them with varying line weight (tapered strokes, brush-style thick downstrokes, one pen per layer).
-* FluidNC config: [`Firmware/FluidNC/midtbot_s3.yaml`](Firmware/FluidNC/midtbot_s3.yaml).
+* [Multipen](Docs/multipen.md): use a multi-colour pen (BIC 4-Colour, Jetstream 4&1, Sarasa Multi...) with a servo selector, and the plotter switches colours mid-page by itself. Strokes go to the refill nearest their colour in the layout.
+* FluidNC configs: [`midtbot_s3.yaml`](Firmware/FluidNC/midtbot_s3.yaml) (single pen), [`midtbot_s3_multipen.yaml`](Firmware/FluidNC/midtbot_s3_multipen.yaml) (adds the colour-selector servos).
 
 ### Donation
 

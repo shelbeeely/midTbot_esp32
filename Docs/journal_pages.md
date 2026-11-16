@@ -15,7 +15,8 @@ It has three parts:
 | `journal_plot` | Turns SVG pages into G-code with per-point pressure | [`Tools/journal_plot/`](../Tools/journal_plot/) |
 
 The controller side (ESP32-S3, off-the-shelf parts) is in
-[esp32s3_upgrade.md](esp32s3_upgrade.md).
+[esp32s3_upgrade.md](esp32s3_upgrade.md). To switch colours automatically
+with a multi-colour pen (BIC 4-Colour style), see [multipen.md](multipen.md).
 
 ## 1. How the pressure works
 
