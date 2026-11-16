@@ -1,0 +1,45 @@
+# journal_plot profile for black Pilot G2 gel pens, one tip size per Inkscape layer.
+# The preview draws each pen at the width of line it really lays down.
+#
+#   python3 journal_plot.py examples/raccoon_sketch.svg -p profile.g2.example.toml --preview
+#
+# Name the layers in your drawing "G2 0.38", "G2 0.5", "G2 0.7", "G2 1.0" (any subset).
+# The plotter pauses before each layer so you can swap pens. Using one pen
+# for everything? Put its tip in [pen] and drop the [pens] sections.
+
+[pen]
+z_up = 5.0
+z_touch = 0.0
+z_max = -1.0        # gel pens write under their own weight; don't press hard
+color = "#141418"   # preview ink colour
+line_flex = 0.13    # a gel line only changes about +/-13 % with pressure
+
+[motion]
+draw_feed = 1500    # gel ink keeps up well; slow down if lines break up
+dwell_down = 0.08
+dwell_up = 0.12
+
+[pressure]
+default = 0.5
+min = 0.1
+taper_in = 0.3
+taper_out = 0.5
+
+[page]
+origin_x = 3.0
+origin_y = 3.0
+max_x = 100.0
+max_y = 100.0
+
+[pens."G2 0.38"]    # ultra fine: about a 0.26 mm line (estimated)
+tip = "g2-0.38"
+
+[pens."G2 0.5"]     # extra fine: about 0.32 mm
+tip = "g2-0.5"
+
+[pens."G2 0.7"]     # fine: 0.39 mm (Pilot's figure)
+tip = "g2-0.7"
+
+[pens."G2 1.0"]     # bold: about 0.52 mm (estimated). Lays a lot of wet ink: let it dry.
+tip = "g2-1.0"
+draw_feed = 1200

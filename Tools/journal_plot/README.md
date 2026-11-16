@@ -14,6 +14,9 @@ python3 journal_plot.py --test-pattern -p profile.example.toml -o test.gcode
 python3 journal_plot.py examples/multipen_page.svg -p profile.multipen.example.toml --preview
 python3 journal_plot.py --offset-test -p profile.multipen.example.toml -o offset_test.gcode
 
+# simulate real pens in the preview (Pilot G2 0.38 / 0.5 / 0.7 / 1.0)
+python3 journal_plot.py examples/raccoon_sketch.svg -p profile.g2.example.toml --preview
+
 python3 -m pytest tests
 ```
 

@@ -327,3 +327,50 @@ def test_manual_slot_keeps_a_separate_pen_out_of_the_multipen(tmp_path):
     text = out.read_text()
     # one pause for the brush pen and one for the multipen's height setup
     assert text.count("M0") == 2
+
+
+# --------------------------------------------------------------------------
+# Simulated pens (Pilot G2 tips) in the preview
+
+G2_PROFILE = HERE.parent / "profile.g2.example.toml"
+RACCOON = HERE.parent / "examples" / "raccoon_sketch.svg"
+
+
+def test_tip_sets_the_preview_line_width():
+    c = cfg(tip="g2-0.7")
+    assert jp.preview_width(c, 0.5) == pytest.approx(0.39)
+    assert jp.preview_width(c, 1.0) == pytest.approx(0.39 * 1.13)
+    assert jp.preview_width(c, 0.0) == pytest.approx(0.39 * 0.87)
+    # every G2 tip is known, and a bigger ball gives a wider line
+    widths = [jp.preview_width(cfg(tip=t), 0.5) for t in ("g2-0.38", "g2-0.5", "g2-0.7", "g2-1.0")]
+    assert widths == sorted(widths) and widths[0] < widths[-1]
+
+
+def test_explicit_line_width_wins_and_no_pen_keeps_the_old_preview():
+    assert jp.preview_width(cfg(tip="g2-0.7", line_width=0.3, line_flex=0.0), 1.0) == pytest.approx(0.3)
+    assert jp.preview_width(cfg(), 0.5) == pytest.approx(0.12 + 0.5 * 1.08)
+
+
+def test_unknown_tip_is_rejected(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[pen]\ntip = "g2-0.9"\n')
+    with pytest.raises(SystemExit):
+        jp.load_profile(bad)
+
+
+def test_raccoon_plots_with_four_g2_pens(tmp_path):
+    out = tmp_path / "raccoon.gcode"
+    preview = tmp_path / "raccoon_preview.svg"
+    assert jp.main([str(RACCOON), "-p", str(G2_PROFILE), "-o", str(out), "--preview", str(preview)]) == 0
+    text = out.read_text()
+    # one pen-change pause per tip, boldest first
+    assert text.count("M0") == 4
+    order = [text.index(f"pen: G2 {t} ") for t in ("1.0", "0.7", "0.5", "0.38")]
+    assert order == sorted(order)
+    # the preview only uses widths a G2 can make, all in one ink colour
+    svg = preview.read_text()
+    widths = {float(w) for w in re.findall(r'stroke-width="([\d.]+)"', svg)}
+    assert min(widths) >= 0.26 * 0.87 - 1e-3 and max(widths) <= 0.52 * 1.13 + 1e-3
+    assert set(re.findall(r'stroke="(#[0-9a-f]+)"', svg)) == {"#141418"}
+    # gel pens are never pressed past their own z_max
+    assert min(float(z) for z in re.findall(r"Z(-?[\d.]+)", text)) >= -1.0 - 1e-9

@@ -27,6 +27,9 @@ Strokes go to the slot whose color is nearest their stroke colour (or set
 [pens."Layer"] slot = "<colour>"), and colours switch automatically with no
 pause. Calibrate tip offsets with --offset-test.
 
+Real pens: give a pen tip = "g2-0.7" (Pilot G2 0.38/0.5/0.7/1.0) or line_width in
+mm and the preview draws it at its true width instead of width-for-pressure.
+
 Pressure maps onto the servo Z axis set up in Firmware/FluidNC/midtbot_s3.yaml:
 z_up (pen up), z_touch (tip just touching), z_max (full pressure).
 See Docs/journal_pages.md and Docs/multipen.md.
@@ -60,7 +63,10 @@ DEFAULTS: dict[str, dict] = {
         "offset_y": 0.0,
         "select": [],       # multipen: G-code lines to run when this pen becomes active
         "select_dwell": 0.3,  # s to wait after the select G-code
-        "color": "",        # multipen: ink colour; strokes nearest this colour use the slot
+        "color": "",        # ink colour for the preview; multipen strokes go to the nearest colour
+        "tip": "",          # a known pen (see PEN_TIPS), e.g. "g2-0.7": previews at its real line width
+        "line_width": 0.0,  # or give the line width in mm yourself (0 = generic pressure preview)
+        "line_flex": 0.13,  # how much pressure changes that width: +/- this fraction
     },
     "motion": {
         "draw_feed": 1500.0,   # mm/min along the paper while drawing
@@ -95,10 +101,16 @@ DEFAULTS: dict[str, dict] = {
 }
 
 PEN_OVERRIDABLE = set(DEFAULTS["pressure"]) | set(DEFAULTS["motion"]) | {"z_max", "slot"}
+PEN_OVERRIDABLE |= {"tip", "line_width", "line_flex", "color"}
 PEN_OVERRIDABLE -= {"park_x", "park_y"}
+# Real pens for the preview: tip (ball) size -> the line it lays down, in mm.
+# Pilot G2: 0.7 -> 0.39 is Pilot's published figure and 0.5 -> 0.32 a retailer's;
+# 0.38 and 1.0 are estimated from the same ratio. Measure your own and use
+# line_width if they differ.
+PEN_TIPS = {"g2-0.38": 0.26, "g2-0.5": 0.32, "g2-0.7": 0.39, "g2-1.0": 0.52}
 # What a multipen slot (one refill colour, or one pen position) may set.
 SLOT_KEYS = {"axis", "offset_x", "offset_y", "select", "select_dwell", "color",
-             "z_up", "z_touch", "z_max", "z_hover", "force_curve"}
+             "z_up", "z_touch", "z_max", "z_hover", "force_curve", "tip", "line_width", "line_flex"}
 AXES = ("Z", "A", "B", "C")
 Z_TOLERANCE = 0.01  # servo units allowed when removing redundant points
 
@@ -207,6 +219,10 @@ def validate(cfg: dict) -> None:
         cfg["select"] = [cfg["select"]] if cfg["select"] else []
     if not all(isinstance(line, str) for line in cfg["select"]):
         sys.exit("profile: select must be a G-code string or a list of strings")
+    if cfg["tip"] and cfg["tip"] not in PEN_TIPS:
+        sys.exit(f"profile: unknown tip {cfg['tip']!r}; known tips: {', '.join(sorted(PEN_TIPS))}")
+    if cfg["line_width"] < 0 or not 0 <= cfg["line_flex"] <= 0.5:
+        sys.exit("profile: line_width must be >= 0 and line_flex within 0..0.5")
     if cfg["color"] and parse_color(cfg["color"]) is None:
         sys.exit(f"profile: color must look like \"#rrggbb\" (got {cfg['color']!r})")
     if not cfg["z_max"] < cfg["z_touch"] < cfg["z_up"]:
@@ -687,8 +703,19 @@ def to_gcode(plotted: list[Plotted], page: tuple[float, float], cfg: dict, sourc
     return lines, stats
 
 
-def preview_svg(plotted: list[Plotted], page: tuple[float, float], w_min=0.12, w_max=1.2) -> str:
-    """Page-orientation SVG where line width shows the planned pressure."""
+def preview_width(cfg: dict, pressure: float, w_min=0.12, w_max=1.2) -> float:
+    """Line width (mm) the preview draws at a given pressure.
+
+    With a known tip or a line_width the pen is simulated: its real width,
+    nudged by pressure. Otherwise width simply stands for pressure."""
+    nominal = cfg["line_width"] or PEN_TIPS.get(cfg["tip"], 0.0)
+    if nominal:
+        return nominal * (1 + cfg["line_flex"] * (2 * pressure - 1))
+    return w_min + pressure * (w_max - w_min)
+
+
+def preview_svg(plotted: list[Plotted], page: tuple[float, float]) -> str:
+    """Page-orientation SVG: simulated pens at their real width, others with width = pressure."""
     colors = ["#1a1a1a", "#1f5fbf", "#b8322e", "#2f8a3c", "#8a4fbf", "#c27a12"]
     pen_color: dict[str, str] = {}
     out = [
@@ -703,7 +730,7 @@ def preview_svg(plotted: list[Plotted], page: tuple[float, float], w_min=0.12, w
         color = ink if ink else pen_color.setdefault(p.stroke.pen, colors[len(pen_color) % len(colors)])
         pts = p.stroke.pts
         if len(pts) == 1:
-            r = (w_min + p.pressures[0] * (w_max - w_min)) / 2
+            r = preview_width(p.stroke.cfg, p.pressures[0]) / 2
             out.append(f'<circle cx="{fmt(pts[0][0])}" cy="{fmt(pts[0][1])}" r="{fmt(r)}" fill="{color}"/>')
             continue
         run, run_level = [pts[0]], None
@@ -711,17 +738,16 @@ def preview_svg(plotted: list[Plotted], page: tuple[float, float], w_min=0.12, w
             q = (p.pressures[i - 1] + p.pressures[i]) / 2
             level = round(q * (levels - 1))
             if run_level is not None and level != run_level:
-                out.append(_poly(run, run_level, levels, w_min, w_max, color))
+                out.append(_poly(run, preview_width(p.stroke.cfg, run_level / (levels - 1)), color))
                 run = [pts[i - 1]]
             run.append(pts[i])
             run_level = level
-        out.append(_poly(run, run_level, levels, w_min, w_max, color))
+        out.append(_poly(run, preview_width(p.stroke.cfg, run_level / (levels - 1)), color))
     out.append("</svg>")
     return "\n".join(out)
 
 
-def _poly(run, level, levels, w_min, w_max, color):
-    w = w_min + (level / (levels - 1)) * (w_max - w_min)
+def _poly(run, w, color):
     d = " ".join(f"{fmt(x)},{fmt(y)}" for x, y in run)
     return (f'<polyline points="{d}" fill="none" stroke="{color}" stroke-width="{fmt(w)}" '
             f'stroke-linecap="round" stroke-linejoin="round"/>')

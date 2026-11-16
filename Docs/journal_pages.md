@@ -170,7 +170,43 @@ draw_feed = 900      # slower lets a brush lay down ink
 z_max = -1.0         # never press a fine tip hard
 ```
 
-## 6. Tips
+## 6. Previewing with real pens (Pilot G2)
+
+By default the preview uses line width to stand for pressure. If you tell
+`journal_plot` which pen a layer is drawn with, it simulates that pen
+instead: every stroke is drawn at the width of line the pen really lays down,
+nudged a little by pressure, so the preview shows what will be on the paper.
+
+```toml
+[pens."G2 0.7"]
+tip = "g2-0.7"        # or: line_width = 0.39  (mm, for any other pen)
+```
+
+| Tip | Line on paper | Source |
+|---|---|---|
+| `g2-0.38` | about 0.26 mm | estimated from the ratio of the two below |
+| `g2-0.5` | about 0.32 mm | retailer listing |
+| `g2-0.7` | 0.39 mm | Pilot |
+| `g2-1.0` | about 0.52 mm | estimated |
+
+A gel pen's line barely changes with pressure, so `line_flex` (default 0.13,
+meaning ±13 %) keeps the simulation honest: with these pens, tone comes from
+how many lines you lay down and which tip you use, not from pressing harder.
+If your pens measure differently, set `line_width` yourself.
+
+[`profile.g2.example.toml`](../Tools/journal_plot/profile.g2.example.toml)
+sets up all four tips, one per layer. The example drawing
+[`examples/raccoon_sketch.svg`](../Tools/journal_plot/examples/raccoon_sketch.svg)
+uses them the way an illustrator would: the 1.0 for solid blacks, 0.7 and
+0.5 for the darks, and the 0.38 for fine fur. Lights, whiskers and the glints
+in the eyes are paper left untouched. It fills a 94 × 94 mm page: about
+6,000 strokes, 15 m of ink, an hour of plotting and four pen changes.
+
+```sh
+python3 journal_plot.py examples/raccoon_sketch.svg -p profile.g2.example.toml --preview
+```
+
+## 7. Tips
 
 * Keep the notebook flat and still: clip it, or put a steel sheet underneath
   and use magnets. The plotter's feet sit on the page, so the pages under
