@@ -190,3 +190,7 @@ automatically.
 ```sh
 python3 journal_plot.py examples/skyline_ballpoint.svg -p profile.ballpoint4.example.toml --preview
 ```
+
+[`examples/grwm_ballpoint.svg`](../Tools/journal_plot/examples/grwm_ballpoint.svg) is a portrait page drawn the same
+way (70 × 94 mm): a girl doing her eyeliner in a vanity mirror. The figure is invented, not drawn from a photo.
+It is a longer plot still, about 27,000 strokes.
