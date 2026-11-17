@@ -30,6 +30,7 @@ There currently are no full kits for sale, and the original controller kit is no
 * [Multipen](Docs/multipen.md): use a multi-colour pen (BIC 4-Colour, Jetstream 4&1, Sarasa Multi...) with a servo selector, and the plotter switches colours mid-page by itself. Strokes go to the refill nearest their colour in the layout.
 * Coloured ballpoint: with a 4-colour multipen and pressure control, hatching can be layered so colours mix. The [dusk skyline example](Tools/journal_plot/examples/skyline_ballpoint.svg) is drawn this way; see [Multipen](Docs/multipen.md).
 * Real-pen previews: tell `journal_plot` which pen a layer uses (Pilot G2 0.38, 0.5, 0.7 or 1.0, or any line width) and the preview draws it at its true width. The [raccoon example](Tools/journal_plot/examples/raccoon_sketch.svg) is drawn for all four G2 tips.
+* [Sketch engine](Tools/sketch_engine): turns a photo into a hand-style pen sketch with a drawing-app replay and a plottable SVG, with the lessons from every drawing so far built in ([LESSONS.md](Tools/sketch_engine/LESSONS.md)).
 * FluidNC configs: [`midtbot_s3.yaml`](Firmware/FluidNC/midtbot_s3.yaml) (single pen), [`midtbot_s3_multipen.yaml`](Firmware/FluidNC/midtbot_s3_multipen.yaml) (adds the colour-selector servos).
 
 ### Donation
