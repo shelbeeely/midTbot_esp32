@@ -9,9 +9,8 @@ Lessons built in (see LESSONS.md):
 from __future__ import annotations
 
 import math
-import random
 
-import numpy as np
+
 
 from analyse import PX
 
@@ -64,18 +63,25 @@ def zigzag_hatch(study, mask, target, line_units, rng, angle_offset=0.0, tile=1.
                 s0 -= 1
             while s1 < L and inside(ox + dx * (s1 + 1), oy + dy * (s1 + 1)):
                 s1 += 1
-            if s1 - s0 >= 3 and inside(ox, oy):
-                s0 += rng.uniform(0, 1.5); s1 -= rng.uniform(0, 1.5)
-                rows.append(((ox + dx * s0, oy + dy * s0), (ox + dx * s1, oy + dy * s1)))
+            if s1 - s0 >= 3 and inside(ox, oy) and rng.random() > 0.04:      # now and then a row is skipped
+                s0 += rng.uniform(0, 2.5); s1 -= rng.uniform(0, 2.5)
+                a_, b_ = (ox + dx * s0, oy + dy * s0), (ox + dx * s1, oy + dy * s1)
+                # contour hatching: bow the row a little toward the form's direction at its middle (capped ~10 deg)
+                mx, my = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2
+                am = float(study.angle[int(min(H - 1, max(0, my))), int(min(W - 1, max(0, mx)))])
+                turn = math.atan2(math.sin(2 * (am - a)), math.cos(2 * (am - a))) / 2
+                turn = max(-0.17, min(0.17, turn))
+                bow = math.tan(turn) * (s1 - s0) / 4
+                rows.append((a_, (mx + nx * bow, my + ny * bow), b_))
             else:
                 rows.append(None)
-            k += pitch * rng.uniform(0.85, 1.15)
+            k += pitch * rng.uniform(0.7, 1.3)
         # join rows into zig-zag runs; lift the pen every few rows or where a row is missing
         if pitch > 5.0 * PX / 10:                      # sparse: separate strokes, no zig-zag joins
             for r in rows:
                 if r is not None:
-                    a0, a1 = r if rng.random() < 0.5 else (r[1], r[0])
-                    out.append(([(a0[0] / PX, a0[1] / PX), (a1[0] / PX, a1[1] / PX)], rng.uniform(*p)))
+                    q = list(r) if rng.random() < 0.5 else list(r)[::-1]
+                    out.append(([(x / PX, y / PX) for x, y in q], rng.uniform(*p)))
             continue
         chain, flip, n_run = [], False, rng.randint(*run)
         for r in rows + [None]:
@@ -86,8 +92,7 @@ def zigzag_hatch(study, mask, target, line_units, rng, angle_offset=0.0, tile=1.
                 chain, n_run = [], rng.randint(*run)
                 if r is None:
                     continue
-            a0, a1 = (r[1], r[0]) if flip else r
-            chain += [a0, a1]
+            chain += list(r)[::-1] if flip else list(r)
             flip = not flip
     return out
 
@@ -109,6 +114,65 @@ def arc_bands(arcs, line_units, rng, darkness=0.9, p=(0.7, 0.9)):
                 pts.append((cx + x * math.cos(rot) - y * math.sin(rot), cy + x * math.sin(rot) + y * math.cos(rot)))
             out.append((pts if i % 2 == 0 else pts[::-1], rng.uniform(*p)))
     return out
+
+
+def eye(cx, cy, r_iris, rng, highlight=(-0.35, -0.35), width=None, tilt=0.0, iris_ink_p=0.45):
+    """An eye drawn the way the guides teach. Returns dict of stroke lists by ink role:
+    'iris' (light spokes, then a darker rim), 'pupil' (darkest), 'lash' (upper lid + grouped lash clumps,
+    sparse lower lashes). The highlight is left bare. Units throughout."""
+    w = width or r_iris * 3.0
+    hx, hy, hr = cx + highlight[0] * r_iris, cy + highlight[1] * r_iris, r_iris * 0.28
+    def clear(x, y):
+        return math.hypot(x - hx, y - hy) > hr
+    def cut(pts, p):
+        out, run = [], []
+        for q in pts:
+            if clear(*q):
+                run.append(q)
+            elif len(run) > 1:
+                out.append((run, p)); run = []
+            else:
+                run = []
+        if len(run) > 1:
+            out.append((run, p))
+        return out
+    iris, pupil, lash = [], [], []
+    rp = r_iris * 0.42
+    for i in range(44):                                   # spokes from the pupil, some stopping short
+        a = i / 44 * 2 * math.pi + rng.uniform(-0.05, 0.05)
+        r1 = r_iris * rng.uniform(0.7, 1.0)
+        iris += cut([(cx + rp * math.cos(a), cy + rp * math.sin(a)), (cx + r1 * math.cos(a), cy + r1 * math.sin(a))], iris_ink_p)
+    for k, f in enumerate((1.0, 0.94, 0.88)):            # darker outer rim
+        iris += cut([(cx + r_iris * f * math.cos(t / 30 * 2 * math.pi), cy + r_iris * f * math.sin(t / 30 * 2 * math.pi)) for t in range(31)], 0.8)
+    rr = rp
+    while rr > 0.03:                                     # pupil: the darkest point
+        pupil += cut([(cx + rr * math.cos(t / 20 * 2 * math.pi), cy + rr * math.sin(t / 20 * 2 * math.pi)) for t in range(21)], 0.95)
+        rr -= 0.06
+    def lid(t, upper=True):
+        x = cx + (t - 0.5) * w
+        h = (r_iris * 1.05 if upper else r_iris * 0.8) * math.sin(math.pi * t)
+        y = cy - h if upper else cy + h
+        return (x * math.cos(tilt) - (y - cy) * math.sin(tilt) + cx * (1 - math.cos(tilt)), cy + (x - cx) * math.sin(tilt) + (y - cy) * math.cos(tilt))
+    for k in range(3):                                    # upper lash line, heavier toward the outer corner
+        lash.append(([lid(t / 24) for t in range(int(24 * (0.08 * k)), 25)], 0.9))
+    t = 0.25
+    while t < 0.98:                                       # lash clumps: a few hairs, flicked outward, tapered
+        x, y = lid(t)
+        n = rng.randint(2, 4)
+        out_a = -math.pi / 2 + (t - 0.4) * 1.6
+        for j in range(n):
+            a = out_a + rng.uniform(-0.25, 0.25)
+            L = r_iris * rng.uniform(0.5, 0.9) * (0.6 + 0.6 * t)
+            lash.append(([(x, y), (x + L * 0.5 * math.cos(a), y + L * 0.5 * math.sin(a)),
+                          (x + L * math.cos(a + 0.25), y + L * math.sin(a + 0.25))], 0.7))
+        t += rng.uniform(0.09, 0.15)
+    low = [lid(t / 20, upper=False) for t in range(2, 19)]   # lower lid: broken, light
+    for a in range(0, len(low) - 3, 5):
+        lash.append((low[a:a + 4], 0.35))
+    for t in (0.55, 0.7, 0.82):                           # sparse lower lashes, curving down
+        x, y = lid(t, upper=False)
+        lash.append(([(x, y), (x + 0.15, y + r_iris * 0.35)], 0.4))
+    return dict(iris=iris, pupil=pupil, lash=lash)
 
 
 def strands(study, mask, target, line_units, rng, length=(5, 12), cell=0.8, curve=0.25, p=(0.4, 0.7), focus=(0, 0)):
@@ -187,10 +251,16 @@ def scribble(path, rng, width=1.2, loops=1.2, p=0.35, step=0.3):
     return out
 
 
-def contours(traced, rng, lo=0.25, hi=0.85):
-    """Inked contours from traced edges: confident where the photo's edge is sharp, broken where it is soft."""
+def contours(traced, rng, lo=0.25, hi=0.85, study=None):
+    """Lost and found: a firm line where two value groups meet hard, a broken or no line where tones carry the edge."""
     out = []
     for pts, s in traced:
+        if study is not None:
+            e = [float(study.group_edge[int(min(study.H - 1, y * PX)), int(min(study.W - 1, x * PX))]) for x, y in pts]
+            ge = sum(e) / len(e)
+            if ge < 0.06 and s < 0.6:              # inside one value shape: let the tone carry it
+                continue
+            s = 0.5 * s + 0.5 * min(1.0, ge * 2)
         p = lo + (hi - lo) * s
         if s < 0.3 and len(pts) > 4:                          # soft edge: a few broken touches
             k = 0

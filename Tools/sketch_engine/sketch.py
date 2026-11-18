@@ -36,7 +36,7 @@ from timeline import Timeline, stable_rng  # noqa: E402
 
 FINISH = {1: 1.0, 2: 0.85, 3: 0.6, 4: 0.3}          # how far each priority is carried
 TILE = {1: 1.3, 2: 1.6, 3: 2.2, 4: 3.0}
-OFFSETS = [0.0, 0.5, -0.45, 0.95, -0.9, 0.25]
+CROSS = (0.26, 1.05)                               # cross-hatch angles 15-60 degrees apart (radians)
 BUDGET = {"gesture": 12.0, "construction": 22.0, "contours": 16.0, "tone": 75.0, "accents": 10.0}
 
 
@@ -138,58 +138,69 @@ def run(cfg, out, video=False):
     # ---------------------------------------------------------------- 3. contours from the photo's own edges
     rng = stable_rng("contours")
     for f, tr in feats:
-        T.strokes(M.contours(tr, rng), f.get("ink", "BLK"), "contours", speed=200)
+        T.strokes(M.contours(tr, rng, study=st), f.get("ink", "BLK"), "contours", speed=200)
 
-    # ---------------------------------------------------------------- 4. tone: regions in priority order, inks light -> dark
+    # ---------------------------------------------------------------- 4. tone, in the guides' order:
+    #   shadow shapes first (one ink, one angle), then midtones at a second angle, then the darks at a third,
+    #   then build up only what is still too light. Light shapes stay bare paper.
     order = sorted(st.regions, key=lambda r: r["cfg"].get("priority", 2))
-    for r in order:
+    G = st.groups
+    def tone_layer(r, ink, tgt, layer, rng):
         c = r["cfg"]
-        inks = [k for k in c.get("inks", []) if k in pal]
-        if not inks or not r["mask"].any():
-            continue
-        pr = c.get("priority", 2)
-        rng = stable_rng("tone " + r["name"])
-        D = st.dark * r["mask"]
-        n = len(inks)
-        for k, ink in enumerate(inks):
-            # each ink owns a band of the value range: the first covers the light half-tones only,
-            # the last (darkest) takes over the deep values; this keeps darks dark instead of colourful
-            lo, hi = 0.8 * k / n, 0.8 * k / n + 0.55
-            band = np.clip((D - lo) / (hi - lo), 0, 1)
-            if k < n - 1:
-                band = band * np.clip((1.0 - D) / 0.35 + 0.2, 0.2, 1)
-            tgt = c["finish"] * c.get("share", 0.6) * band
-            if c.get("arcs") and not c.get("polygons") and not c.get("ellipses"):
-                items = M.arc_bands(c["arcs"], line_units, rng, darkness=0.95) if k == n - 1 else []
-            elif c.get("kind") == "hair":
-                items = M.strands(st, r["mask"], tgt, line_units, rng, length=tuple(c.get("strand_length", (4, 10))), focus=focus)
-            else:
-                items = M.zigzag_hatch(st, r["mask"], tgt, line_units, rng, angle_offset=OFFSETS[k % len(OFFSETS)],
-                                       tile=c.get("tile", TILE[pr]), focus=focus)
-            T.strokes(items, ink, "tone")
-    img = measure("layered tone")
+        if c.get("kind") == "eye":
+            return []
+        if c.get("arcs") and not c.get("polygons") and not c.get("ellipses"):
+            return M.arc_bands(c["arcs"], line_units, rng, darkness=0.95) if layer == 3 else []
+        if c.get("kind") == "hair":
+            return M.strands(st, r["mask"], tgt, line_units, rng, length=tuple(c.get("strand_length", (4, 10))), focus=focus)
+        r.setdefault("angles", [0.0])
+        while len(r["angles"]) < layer:
+            r["angles"].append(r["angles"][-1] + rng.choice((-1, 1)) * rng.uniform(*CROSS))
+        return M.zigzag_hatch(st, r["mask"], tgt, line_units, rng, angle_offset=r["angles"][layer - 1],
+                              tile=c.get("tile", TILE[c.get("priority", 2)]), focus=focus)
+    layers = [("shadow shapes", lambda D, lt: np.where(G == 2, 0.25 + 0.15 * D, 0), 0),
+              ("midtones", lambda D, lt: np.where(G >= 1, 0.12 + 0.25 * D, lt * np.clip(D - 0.05, 0, 1)), 1),
+              ("darks", lambda D, lt: np.where(G == 2, 0.35 * np.clip((D - 0.5) / 0.5, 0, 1) + 0.12, 0), 2)]
+    for li, (lname, target, ink_pos) in enumerate(layers, start=1):
+        for r in order:
+            c = r["cfg"]
+            inks = [k for k in c.get("inks", []) if k in pal]
+            if not inks or not r["mask"].any():
+                continue
+            ink = inks[min(ink_pos, len(inks) - 1)] if ink_pos < 2 else inks[-1]
+            D = st.dark * r["mask"]
+            # light shapes stay nearly bare; light_tone lets pale skin keep a whisper of its form
+            tgt = (c["finish"] * c.get("share", 0.6) / 0.6 * target(D, c.get("light_tone", 0.04)) * r["mask"]).astype(np.float32)
+            T.strokes(tone_layer(r, ink, tgt, li, stable_rng(f"{lname} {r['name']}")), ink, "tone")
+        img = measure(lname)
 
-    # ---------------------------------------------------------------- 5. fill to target: compare and build up what is still too light
+    # ---------------------------------------------------------------- 5. build up what is still too light, darkest ink
     for it in range(cfg.get("fill_passes", 2)):
         rd = 1 - cv2.GaussianBlur(img.mean(axis=2).astype(np.float32), (0, 0), 2)
         for r in order:
             c = r["cfg"]
             inks = [k for k in c.get("inks", []) if k in pal]
-            if not inks or c.get("priority", 2) > 3 or c.get("arcs"):
+            if not inks or c.get("priority", 2) > 3 or c.get("arcs") or c.get("kind") == "eye":
                 continue
             want = cv2.GaussianBlur(st.dark * c["finish"], (0, 0), 2)
-            res = np.clip(want - rd, 0, 1) * r["mask"] * 1.1
+            res = np.clip(want - rd, 0, 1) * r["mask"] * (G >= 1) * 1.1
             if res.max() < 0.06:
                 continue
-            ink = inks[-1]                       # building up what is still too light: the region's darkest ink
-            rng = stable_rng(f"fill {it} {r['name']}")
-            if c.get("kind") == "hair":
-                items = M.strands(st, r["mask"], res, line_units, rng, length=tuple(c.get("strand_length", (4, 10))), focus=focus)
-            else:
-                items = M.zigzag_hatch(st, r["mask"], res, line_units, rng, angle_offset=OFFSETS[(it + 3) % len(OFFSETS)],
-                                       tile=c.get("tile", TILE[c.get("priority", 2)]), min_t=0.06, focus=focus)
-            T.strokes(items, ink, "tone")
+            T.strokes(tone_layer(r, inks[-1], res.astype(np.float32), 4 + it, stable_rng(f"fill {it} {r['name']}")), inks[-1], "tone")
         img = measure(f"fill {it + 1}")
+
+    # ---------------------------------------------------------------- eyes: the guides' sequence, iris -> pupil -> lashes
+    for r in st.regions:
+        c = r["cfg"]
+        if c.get("kind") != "eye":
+            continue
+        rng = stable_rng("eye " + r["name"])
+        parts = M.eye(*c["center"], c["iris"], rng, highlight=tuple(c.get("highlight", (-0.35, -0.35))),
+                      width=c.get("width"), tilt=math.radians(c.get("tilt", 0)))
+        inks = [k for k in c.get("inks", []) if k in pal] or ["BLK"]
+        T.strokes(parts["iris"], inks[0], "accents", speed=120)
+        T.strokes(parts["pupil"], inks[-1], "accents", speed=120)
+        T.strokes(parts["lash"], inks[-1], "accents", speed=160)
 
     # ---------------------------------------------------------------- 6. accents: the sharpest darks, scribbled silhouettes
     rng = stable_rng("accents")

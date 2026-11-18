@@ -65,6 +65,8 @@ def test_example_runs_and_value_error_falls_as_the_drawing_develops(raccoon):
     errs = [s["error"] for s in report["stages"]]
     assert errs[0] > errs[-1] * 2
     assert errs[-1] < 0.2
+    names = [s["stage"] for s in report["stages"]]
+    assert names.index("shadow shapes") < names.index("midtones") < names.index("darks")
     for f in ("drawing.png", "compare.jpg", "drawing.svg", "events.json", "report.json"):
         assert os.path.exists(os.path.join(out, f))
 
@@ -87,3 +89,52 @@ def test_svg_plots_with_journal_plot(raccoon, tmp_path):
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "d.gcode").stat().st_size > 1000
+
+
+# ---------------- practices from drawing guides
+
+def _study_with(dark):
+    import analyse as A
+    rgb = np.repeat((1 - dark)[..., None], 3, axis=2).astype(np.float32)
+    return A.Study(rgb, [("all", np.ones(dark.shape, bool), {"angle": -35})])
+
+
+def test_value_groups_are_three_clean_shapes():
+    rng = np.random.default_rng(1)
+    dark = np.zeros((300, 300), np.float32)
+    dark[:, 150:] = 0.9                                  # a shadow side
+    dark[100:200, 40:110] = 0.45                         # a midtone shape in the light
+    dark += rng.normal(0, 0.05, dark.shape).astype(np.float32)
+    dark[50, 50] = 1.0                                   # a speck
+    st = _study_with(np.clip(dark, 0, 1))
+    assert set(np.unique(st.groups)) <= {0, 1, 2}
+    import cv2
+    for lv in np.unique(st.groups):
+        n, _, stats, _ = cv2.connectedComponentsWithStats((st.groups == lv).astype(np.uint8), 8)
+        assert all(stats[i, cv2.CC_STAT_AREA] >= 150 for i in range(1, n))     # no specks under 1.5 units^2
+
+
+def test_eye_mark_leaves_the_highlight_bare():
+    parts = M.eye(10, 10, 1.0, stable_rng("eye"), highlight=(-0.35, -0.35))
+    hx, hy, hr = 10 - 0.35, 10 - 0.35, 0.28
+    for role in ("iris", "pupil"):
+        for pts, _ in parts[role]:
+            for x, y in pts:
+                assert np.hypot(x - hx, y - hy) > hr - 1e-6
+    assert parts["lash"] and parts["pupil"]
+
+
+def test_contours_inside_one_value_shape_are_dropped():
+    dark = np.zeros((300, 300), np.float32)
+    dark[:, 150:] = 0.9
+    st = _study_with(dark)
+    inside = ([(3.0, 5.0), (3.0, 25.0)], 0.4)            # in the light, far from the boundary
+    on_edge = ([(15.0, 5.0), (15.0, 25.0)], 0.4)         # along the light/shadow boundary
+    out = M.contours([inside, on_edge], stable_rng("c"), study=st)
+    xs = {round(p[0][0][0]) for p in out}
+    assert 15 in xs and 3 not in xs
+
+
+def test_cross_hatch_angles_are_15_to_60_degrees_apart():
+    lo, hi = sketch.CROSS
+    assert np.degrees(lo) == pytest.approx(15, abs=0.5) and np.degrees(hi) == pytest.approx(60, abs=0.5)

@@ -16,12 +16,28 @@ corrections = true
 
 # ---- regions: inks run light -> dark; priority 1 is carried furthest
 [[region]]
-name = "eyes"
-kind = "detail"
-ellipses = [[26.0, 36.6, 2.1, 1.7, 6], [41.1, 36.4, 1.95, 1.7, -6]]
-inks = ["BRG", "BLK"]
+name = "left eye"
+kind = "eye"
+center = [26.0, 36.6]
+iris = 1.6
+width = 3.4
+tilt = 6
+highlight = [-0.3, -0.45]
+ellipses = [[26.0, 36.6, 1.65, 1.65, 0]]
+inks = ["BLK"]
 priority = 1
-white = 0.75
+
+[[region]]
+name = "right eye"
+kind = "eye"
+center = [41.1, 36.4]
+iris = 1.55
+width = 3.3
+tilt = -6
+highlight = [-0.3, -0.45]
+ellipses = [[41.1, 36.4, 1.6, 1.6, 0]]
+inks = ["BLK"]
+priority = 1
 
 [[region]]
 name = "nose"

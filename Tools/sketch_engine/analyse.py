@@ -57,6 +57,46 @@ class Study:
         for r in self.regions:
             self._calibrate(r)
         self.angle, self.coherence = self._orientation()
+        self._apply_guides()
+        self.groups, self.group_edge = self.value_groups()
+
+    def _apply_guides(self):
+        """Regions can give guide polylines (finger directions, a knuckle line); the stroke direction inside
+        that region follows them instead of photo noise."""
+        for r in self.regions:
+            gl = r["cfg"].get("guides")
+            if not gl or not r["mask"].any():
+                continue
+            segs = [((a[0] + b[0]) / 2 * PX, (a[1] + b[1]) / 2 * PX, math.atan2(b[1] - a[1], b[0] - a[0]))
+                    for g in gl for a, b in zip(g, g[1:])]
+            ys, xs = np.nonzero(r["mask"])
+            c2 = np.zeros(len(xs)); s2 = np.zeros(len(xs))
+            for gx, gy, a in segs:
+                w = 1.0 / ((xs - gx) ** 2 + (ys - gy) ** 2 + 400.0) ** 1.5
+                c2 += w * math.cos(2 * a); s2 += w * math.sin(2 * a)
+            self.angle[ys, xs] = 0.5 * np.arctan2(s2, c2)
+
+    def value_groups(self, levels=3, squint=2.5, min_area=1.5, t1=0.28, t2=0.6):
+        """Squint and reduce to light / mid / shadow shapes (notan), dropping specks under min_area units².
+        Returns (groups 0..levels-1, edge strength 0..1 along group boundaries)."""
+        d = cv2.GaussianBlur(self.dark, (0, 0), squint * PX / 2)
+        g = np.zeros(d.shape, np.uint8)
+        g[d >= t1] = 1
+        if levels >= 3:
+            g[d >= t2] = 2
+        min_px = int(min_area * PX * PX)
+        for lv in range(levels):                       # fold specks into the surrounding group
+            n, lab, stats, _ = cv2.connectedComponentsWithStats((g == lv).astype(np.uint8), 8)
+            for i in range(1, n):
+                if stats[i, cv2.CC_STAT_AREA] < min_px:
+                    m = lab == i
+                    ring = cv2.dilate(m.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool) & ~m
+                    if ring.any():
+                        g[m] = np.bincount(g[ring], minlength=levels).argmax()
+        gf = cv2.GaussianBlur(g.astype(np.float32), (0, 0), 1.5)
+        gx, gy = cv2.Sobel(gf, cv2.CV_32F, 1, 0), cv2.Sobel(gf, cv2.CV_32F, 0, 1)
+        edge = np.clip(np.hypot(gx, gy) / 1.2, 0, 1)
+        return g, edge
 
     def _calibrate(self, r):
         cfg, m = r["cfg"], r["mask"]

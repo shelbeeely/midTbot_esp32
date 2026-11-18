@@ -46,7 +46,22 @@ and where the engine now does it by default, so it doesn't have to be learned ag
 | No per-stroke minimum when compressing a phase | A 0.02 s floor turned a 2-minute target into 3+ minutes. | `Timeline.pace`: floor only for gesture and construction |
 | Show corrections | Real drawings are searched for. | an erased outline and an undone feature line in construction |
 
+## From drawing guides
+
+Practices that portrait and pen guides agree on, and how the engine follows them.
+
+| Practice | Source | Built in |
+|---|---|---|
+| Squint and design 2–3 value shapes before rendering: big light and shadow shapes first, smaller opposite-value shapes inside them, then the in-between values | [Proko: value groups](https://www.proko.com/course-lesson/project-designing-value-groups/comments), [Notan Generator](https://madegooddesigns.com/tools/notan-generator/) | `Study.value_groups`: blurred, three groups, specks under 1.5 units² folded in |
+| Big to small, light to dark: lightest areas bare, open hatching for midtones, dense layers only in the deepest shadows | [Chris Wilson: ballpoint shading](https://chriswilsonstudio.com/ballpoint-pen-shading-techniques/), [Tutsplus](https://design.tutsplus.com/tutorials/how-to-crosshatch-a-landscape-from-a-photograph--cms-22044) | tone layers in `sketch.run`: shadow shapes → midtones → darks → build-up |
+| Each cross-hatch layer 15–60° from the last | [Drawing Academy](https://drawingacademy.com/?p=408) | `CROSS` in `sketch.py` |
+| Hatching follows the form, bending gently, not into a grid | [Bluprint: cross contour](https://www.mybluprint.com/article/drawing-cross-contour-lines), [Proko](https://www.proko.com/lesson/how-to-cross-hatch-for-comics-david-finch/notes) | each row in `zigzag_hatch` bows toward the form, capped at ~10° |
+| Lost and found edges: a firm line only where the edge needs clarity | [Proko](https://www.proko.com/lesson/how-to-cross-hatch-for-comics-david-finch/notes) | `marks.contours(study=…)`: weight from the value-group boundary; lines inside one shape dropped |
+| Head from a sphere with its sides cut off; features placed on the planes | [Loomis approach](https://highartcom.squarespace.com/the-loomis-approach-to-portraits) | not automated yet: region outlines and `guides` carry the planes |
+| Eyes: iris lightly first with spokes, pupil darkest, highlight left bare and partly over the pupil, lashes in irregular tapered clumps, lower lashes sparse and curving down | [Empty Easel](https://emptyeasel.com/?p=102409), [RapidFireArt](https://rapidfireart.com/2013/05/08/how-to-draw-eyes) | `marks.eye`, regions with `kind = "eye"` |
+| Hatching wraps fingers, not photo noise | | `guides` in a region bend the direction field (`Study._apply_guides`) |
+
 ## Still open
-- Eyes are hatched blobs; they need a dedicated iris, pupil and catchlight mark.
 - Lips and other small warm areas over- or under-shoot with only one ink.
-- Hands lose their form: knuckles need form-following guides, not just the photo's orientation.
+- Hands still lose their form against the neck; guides help the direction, not the separation.
+- Designed values trade some measured match for readability: the raccoon example's value error rose from 0.127 to 0.152, mostly in the eyes, where the drawn iris is lighter than the photo's solid black.
